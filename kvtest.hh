@@ -20,6 +20,7 @@
 #include "kvproto.hh"
 #include <vector>
 #include <fstream>
+#include <cfloat>
 
 using lcdf::Str;
 using lcdf::String;
@@ -50,9 +51,19 @@ void kvtest_sync_rw1_seed(C &client, int seed)
     client.rand.reset(seed);
     double tp0 = client.now();
     unsigned n;
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         int32_t x = (int32_t) client.rand.next();
+	double lat_start = client.now();
         client.put_sync(x, x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double tp1 = client.now();
@@ -69,8 +80,19 @@ void kvtest_sync_rw1_seed(C &client, int seed)
 
     double tg0 = client.now();
     unsigned g;
-    for (g = 0; g < n && !client.timeout(1); ++g)
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
+    for (g = 0; g < n && !client.timeout(1); ++g) {
+	double lat_start = client.now();
         client.get_check_sync(a[g], a[g] + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
+    }
     client.wait_all();
     double tg1 = client.now();
 
@@ -78,6 +100,10 @@ void kvtest_sync_rw1_seed(C &client, int seed)
     kvtest_set_time(result, "puts", n, tp1 - tp0);
     kvtest_set_time(result, "gets", g, tg1 - tg0);
     kvtest_set_time(result, "ops", n + g, (tp1 - tp0) + (tg1 - tg0));
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
     free(a);
 }
@@ -93,15 +119,27 @@ unsigned kvtest_rw1puts_seed(C& client, int seed) {
     client.rand.reset(seed);
     double tp0 = client.now();
     unsigned n;
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         int32_t x = (int32_t) client.rand.next();
+	double lat_start = client.now();
         client.put(x, x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double tp1 = client.now();
     client.puts_done();
 
-    client.report(kvtest_set_time(Json(), "puts", n, tp1 - tp0));
+    Json result = Json();
+    kvtest_set_time(result, "puts", n, tp1 - tp0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    client.report(result);
     return n;
 }
 
@@ -124,6 +162,8 @@ void kvtest_rw1_seed(C &client, int seed)
 
     double tg0 = client.now();
     unsigned g;
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
 #if 0
 #define BATCH 8
     for(g = 0; g+BATCH < n && !client.timeout(1); g += BATCH){
@@ -135,8 +175,16 @@ void kvtest_rw1_seed(C &client, int seed)
       client.many_get_check(BATCH, key, expected);
     }
 #else
-    for (g = 0; g < n && !client.timeout(1); ++g)
+    for (g = 0; g < n && !client.timeout(1); ++g) {
+	double lat_start = client.now();
         client.get_check(a[g], a[g] + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
+    }
 #endif
     client.wait_all();
     double tg1 = client.now();
@@ -145,6 +193,8 @@ void kvtest_rw1_seed(C &client, int seed)
     kvtest_set_time(result, "gets", g, tg1 - tg0);
     double delta_puts = n / result["puts_per_sec"].as_d();
     kvtest_set_time(result, "ops", n + g, delta_puts + (tg1 - tg0));
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
     free(a);
 }
@@ -175,10 +225,20 @@ void kvtest_rw1long_seed(C &client, int seed)
     client.rand.reset(seed);
     double tp0 = client.now();
     unsigned n;
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         unsigned fmt = client.rand.next();
         int32_t x = (int32_t) client.rand.next();
+	double lat_start = client.now();
         client.put(Str::snprintf(buf, sizeof(buf), formats[fmt % 4], x), x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double tp1 = client.now();
@@ -198,10 +258,20 @@ void kvtest_rw1long_seed(C &client, int seed)
 
     double tg0 = client.now();
     unsigned g;
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     for (g = 0; g < n && !client.timeout(1); ++g) {
         unsigned fmt = a[2 * g];
         int32_t x = (int32_t) a[2 * g + 1];
+	double lat_start = client.now();
         client.get_check(Str::snprintf(buf, sizeof(buf), formats[fmt % 4], x), x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
     }
     client.wait_all();
     double tg1 = client.now();
@@ -210,6 +280,10 @@ void kvtest_rw1long_seed(C &client, int seed)
     kvtest_set_time(result, "puts", n, tp1 - tp0);
     kvtest_set_time(result, "gets", g, tg1 - tg0);
     kvtest_set_time(result, "ops", n + g, (tp1 - tp0) + (tg1 - tg0));
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
     free(a);
 }
@@ -231,17 +305,35 @@ void kvtest_rw2_seed(C &client, int seed, double getfrac)
     double t0 = client.now();
     uint64_t puts = 0, gets = 0;
     int getfrac65536 = (int) (getfrac * 65536 + 0.5);
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     while (!client.timeout(0) && (puts + gets) <= client.limit()) {
         if (puts == 0 || (client.rand.next() % 65536) >= getfrac65536) {
             // insert
             unsigned x = (offset + puts) * c;
+	    double lat_start = client.now();
             client.put(x, x + 1);
+	    double lat = client.now() - lat_start;
             ++puts;
+
+	    if (lat < put_lat_min)
+	      put_lat_min = lat;
+	    if (put_lat_max < lat)
+	      put_lat_max = lat;
         } else {
             // get
             unsigned x = (offset + (client.rand.next() % puts)) * c;
+	    double lat_start = client.now();
             client.get_check(x, x + 1);
+	    double lat = client.now() - lat_start;
             ++gets;
+
+	    if (lat < get_lat_min)
+	      get_lat_min = lat;
+	    if (get_lat_max < lat)
+	      get_lat_max = lat;
         }
     }
     client.wait_all();
@@ -249,6 +341,10 @@ void kvtest_rw2_seed(C &client, int seed, double getfrac)
 
     Json result = Json().set("puts", puts).set("gets", gets);
     kvtest_set_time(result, "ops", puts + gets, t1 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -281,19 +377,37 @@ void kvtest_rw2fixed_seed(C &client, int seed, double getfrac)
     double t0 = client.now();
     uint64_t puts = 0, gets = 0;
     int getfrac65536 = (int) (getfrac * 65536 + 0.5);
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     while (!client.timeout(0) && (puts + gets) <= client.limit()) {
         if (puts == 0 || (client.rand.next() % 65536) >= getfrac65536) {
             // insert
             unsigned x = (offset + puts) * c;
             x %= 100000000;
+	    double lat_start = client.now();
             client.put(x, x + 1);
+	    double lat = client.now() - lat_start;
             ++puts;
+
+	    if (lat < put_lat_min)
+	      put_lat_min = lat;
+	    if (put_lat_max < lat)
+	      put_lat_max = lat;
         } else {
             // get
             unsigned x = (offset + (client.rand.next() % puts)) * c;
             x %= 100000000;
+	    double lat_start = client.now();
             client.get_check(x, x + 1);
+	    double lat = client.now() - lat_start;
             ++gets;
+
+	    if (lat < get_lat_min)
+	      get_lat_min = lat;
+	    if (get_lat_max < lat)
+	      get_lat_max = lat;
         }
     }
     client.wait_all();
@@ -301,6 +415,10 @@ void kvtest_rw2fixed_seed(C &client, int seed, double getfrac)
 
     Json result = Json().set("puts", puts).set("gets", gets);
     kvtest_set_time(result, "ops", puts + gets, t1 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -330,16 +448,37 @@ void kvtest_rw3(C &client)
 {
     double t0 = client.now();
     uint64_t n;
-    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n)
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
+    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
+	double lat_start = client.now();
         client.put_key8(n, n + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
+    }
     client.wait_all();
 
     client.puts_done();
     client.notice("now getting\n");
 
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     double t1 = client.now();
-    for (unsigned i = 0; i < n; ++i)
+    for (unsigned i = 0; i < n; ++i) {
+	double lat_start = client.now();
         client.get_check_key8(i, i + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
+    }
     client.wait_all();
 
     double t2 = client.now();
@@ -348,6 +487,10 @@ void kvtest_rw3(C &client)
     kvtest_set_time(result, "puts", n, t1 - t0);
     kvtest_set_time(result, "gets", n, t2 - t1);
     kvtest_set_time(result, "ops", n + n, t2 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -361,16 +504,37 @@ void kvtest_rw4(C &client)
 
     double t0 = client.now();
     unsigned n;
-    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n)
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
+    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
+	double lat_start = client.now();
         client.put_key8(top - n, n + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
+    }
     client.wait_all();
 
     client.puts_done();
     client.notice("now getting\n");
 
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     double t1 = client.now();
-    for (unsigned i = 0; i < n; ++i)
+    for (unsigned i = 0; i < n; ++i) {
+	double lat_start = client.now();
         client.get_check_key8(top - i, i + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
+    }
     client.wait_all();
 
     double t2 = client.now();
@@ -379,6 +543,10 @@ void kvtest_rw4(C &client)
     kvtest_set_time(result, "puts", n, t1 - t0);
     kvtest_set_time(result, "gets", n, t2 - t1);
     kvtest_set_time(result, "ops", n + n, t2 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -392,16 +560,37 @@ void kvtest_rw4fixed(C &client)
 
     double t0 = client.now();
     unsigned n;
-    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n)
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
+    for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
+	double lat_start = client.now();
         client.put_key8(top - n, n + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
+    }
     client.wait_all();
 
     client.puts_done();
     client.notice("now getting\n");
 
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     double t1 = client.now();
-    for (unsigned i = 0; i < n; ++i)
+    for (unsigned i = 0; i < n; ++i) {
+	double lat_start = client.now();
         client.get_check_key8(top - i, i + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
+    }
     client.wait_all();
 
     double t2 = client.now();
@@ -410,6 +599,10 @@ void kvtest_rw4fixed(C &client)
     kvtest_set_time(result, "puts", n, t1 - t0);
     kvtest_set_time(result, "gets", n, t2 - t1);
     kvtest_set_time(result, "ops", n + n, t2 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -422,15 +615,27 @@ void kvtest_same_seed(C &client, int seed)
 
     double t0 = client.now();
     unsigned n;
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         unsigned x = client.rand.next() % 10;
+	double lat_start = client.now();
         client.put(x, x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double t1 = client.now();
 
     Json result = Json();
     kvtest_set_time(result, "puts", n, t1 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
     client.report(result);
 }
 
@@ -448,18 +653,41 @@ void kvtest_rwsmall_seed(C &client, int nkeys, int seed)
 
     double t0 = client.now();
     unsigned n;
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         unsigned x = client.rand.next() % (8 * nkeys);
-        if (x & 7)
-            client.get(x >> 3);
-        else
-            client.put(x >> 3, n);
+        if (x & 7) {
+	  double lat_start = client.now();
+	  client.get(x >> 3);
+	  double lat = client.now() - lat_start;
+
+	  if (lat < put_lat_min)
+	    put_lat_min = lat;
+	  if (put_lat_max < lat)
+	    put_lat_max = lat;
+        } else {
+	  double lat_start = client.now();
+	  client.put(x >> 3, n);
+	  double lat = client.now() - lat_start;
+
+	  if (lat < put_lat_min)
+	    put_lat_min = lat;
+	  if (put_lat_max < lat)
+	    put_lat_max = lat;
+	}
     }
     client.wait_all();
     double t1 = client.now();
 
     Json result = Json();
     kvtest_set_time(result, "ops", n, t1 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -474,25 +702,57 @@ void kvtest_rwsmall24(C &client)
 template <typename C>
 void kvtest_rwsep_seed(C &client, int nkeys, int clientid, int seed)
 {
-    for (int n = clientid * (32 + nkeys); n < (clientid + 1) * (32 + nkeys); ++n)
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
+    for (int n = clientid * (32 + nkeys); n < (clientid + 1) * (32 + nkeys); ++n) {
+	double lat_start = client.now();
         client.put(1000000 + n, n);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
+    }
 
     client.rand.reset(seed);
 
     double t0 = client.now();
     unsigned n;
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         unsigned x = client.rand.next() % (8 * nkeys);
-        if (x & 7)
-            client.get(1000000 + clientid * (32 + nkeys) + (x >> 3));
-        else
-            client.put(1000000 + clientid * (32 + nkeys) + (x >> 3), n);
+        if (x & 7) {
+	  double lat_start = client.now();
+	  client.get(1000000 + clientid * (32 + nkeys) + (x >> 3));
+	  double lat = client.now() - lat_start;
+
+	  if (lat < put_lat_min)
+	    put_lat_min = lat;
+	  if (put_lat_max < lat)
+	    put_lat_max = lat;
+        } else {
+	  double lat_start = client.now();
+	  client.put(1000000 + clientid * (32 + nkeys) + (x >> 3), n);
+	  double lat = client.now() - lat_start;
+
+	  if (lat < get_lat_min)
+	    get_lat_min = lat;
+	  if (get_lat_max < lat)
+	    get_lat_max = lat;
+	}
     }
     client.wait_all();
     double t1 = client.now();
 
     Json result = Json();
     kvtest_set_time(result, "ops", n, t1 - t0);
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
 }
 
@@ -509,10 +769,20 @@ void kvtest_rw1fixed_seed(C &client, int seed)
     client.rand.reset(seed);
     double tp0 = client.now();
     unsigned n;
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
     for (n = 0; !client.timeout(0) && n <= client.limit(); ++n) {
         int32_t x = (int32_t) client.rand.next();
         x %= 100000000;
+	double lat_start = client.now();
         client.put(x, x + 1);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double tp1 = client.now();
@@ -531,6 +801,9 @@ void kvtest_rw1fixed_seed(C &client, int seed)
 
     double tg0 = client.now();
     unsigned g;
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
 #if 0
 #define BATCH 8
     for(g = 0; g+BATCH < n && !client.timeout(1); g += BATCH){
@@ -542,8 +815,16 @@ void kvtest_rw1fixed_seed(C &client, int seed)
       client.many_get_check(BATCH, key, expected);
     }
 #else
-    for (g = 0; g < n && !client.timeout(1); ++g)
-        client.get_check(a[g], a[g] + 1);
+    for (g = 0; g < n && !client.timeout(1); ++g) {
+      double lat_start = client.now();
+      client.get_check(a[g], a[g] + 1);
+      double lat = client.now() - lat_start;
+
+      if (lat < get_lat_min)
+	get_lat_min = lat;
+      if (get_lat_max < lat)
+	get_lat_max = lat;
+    }
 #endif
     client.wait_all();
     double tg1 = client.now();
@@ -552,6 +833,10 @@ void kvtest_rw1fixed_seed(C &client, int seed)
     kvtest_set_time(result, "puts", n, tp1 - tp0);
     kvtest_set_time(result, "gets", g, tg1 - tg0);
     kvtest_set_time(result, "ops", n + g, (tp1 - tp0) + (tg1 - tg0));
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
     free(a);
 }
@@ -571,11 +856,21 @@ void kvtest_rw16_seed(C &client, int seed)
     int n;
     char key[256];
     char val[256];
+
+    double put_lat_min = DBL_MAX, put_lat_max = 0;
+
     for (n = 0; !client.timeout(0); ++n) {
         int32_t x = (int32_t) client.rand.next();
         sprintf(key, "%016d", x);
         sprintf(val, "%016d", x + 1);
+	double lat_start = client.now();
         client.put(key, val);
+	double lat = client.now() - lat_start;
+
+	if (lat < put_lat_min)
+	  put_lat_min = lat;
+	if (put_lat_max < lat)
+	  put_lat_max = lat;
     }
     client.wait_all();
     double tp1 = client.now();
@@ -592,10 +887,21 @@ void kvtest_rw16_seed(C &client, int seed)
 
     double tg0 = client.now();
     int g;
+
+    double get_lat_min = DBL_MAX, get_lat_max = 0;
+
     for (g = 0; g < n && !client.timeout(1); ++g) {
         sprintf(key, "%016d", a[g]);
         sprintf(val, "%016d", a[g] + 1);
+	double lat_start = client.now();
         client.get_check(key, val);
+
+	double lat = client.now() - lat_start;
+
+	if (lat < get_lat_min)
+	  get_lat_min = lat;
+	if (get_lat_max < lat)
+	  get_lat_max = lat;
     }
     client.wait_all();
     double tg1 = client.now();
@@ -604,6 +910,10 @@ void kvtest_rw16_seed(C &client, int seed)
     kvtest_set_time(result, "puts", n, tp1 - tp0);
     kvtest_set_time(result, "gets", g, tg1 - tg0);
     kvtest_set_time(result, "ops", n + g, (tp1 - tp0) + (tg1 - tg0));
+    result.set("put_lat_min", put_lat_min);
+    result.set("put_lat_max", put_lat_max);
+    result.set("get_lat_min", get_lat_min);
+    result.set("get_lat_max", get_lat_max);
     client.report(result);
     free(a);
 }

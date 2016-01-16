@@ -642,6 +642,7 @@ main(int argc, char *argv[])
 
   long long total = 0;
   kvstats puts, gets, scans, puts_per_sec, gets_per_sec, scans_per_sec;
+  double put_lat_min = DBL_MAX, put_lat_max = 0, get_lat_min = DBL_MAX, get_lat_max = 0;
   for(i = 0; i < children; i++){
     char buf[2048];
     int cc = read(pipes[i], buf, sizeof(buf)-1);
@@ -670,6 +671,22 @@ main(int argc, char *argv[])
             gets_per_sec.add(dv);
         if (bufj.get("scans_per_sec", dv))
             scans_per_sec.add(dv);
+        if (bufj.get("put_lat_min", dv)) {
+	  if (dv < put_lat_min)
+	    put_lat_min = dv;
+	}
+        if (bufj.get("put_lat_max", dv)) {
+	  if (put_lat_max < dv)
+	    put_lat_max = dv;
+	}
+        if (bufj.get("get_lat_min", dv)) {
+	  if (dv < get_lat_min)
+	    get_lat_min = dv;
+	}
+        if (bufj.get("get_lat_max", dv)) {
+	  if (get_lat_max < dv)
+	    get_lat_max = dv;
+	}
     }
   }
 
@@ -680,6 +697,14 @@ main(int argc, char *argv[])
   puts_per_sec.print_report("puts/s");
   gets_per_sec.print_report("gets/s");
   scans_per_sec.print_report("scans/s");
+  if (put_lat_min != DBL_MAX)
+    printf("minimum put latency: %lf sec\n", put_lat_min);
+  if (put_lat_max != 0)
+    printf("maximum put latency: %lf sec\n", put_lat_max);
+  if (get_lat_min != DBL_MAX)
+    printf("minimum get latency: %lf sec\n", get_lat_min);
+  if (get_lat_max != 0)
+    printf("maximum get latency: %lf sec\n", get_lat_max);
 
   exit(0);
 }
