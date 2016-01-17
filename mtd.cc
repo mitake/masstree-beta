@@ -14,7 +14,7 @@
  * is legally binding.
  */
 // -*- mode: c++ -*-
-// kvd: key/value server
+// mtd: key/value server
 //
 
 #include <stdio.h>
@@ -693,7 +693,7 @@ main(int argc, char *argv[])
           enable_quiesce_stat = !clp->negated;
           break;
       default:
-          fprintf(stderr, "Usage: kvd [-np] [--ld dir1[,dir2,...]] [--cd dir1[,dir2,...]]\n");
+          fprintf(stderr, "Usage: mtd [-np] [--ld dir1[,dir2,...]] [--cd dir1[,dir2,...]]\n");
           exit(EXIT_FAILURE);
       }
   }
