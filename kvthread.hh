@@ -250,7 +250,10 @@ class threadinfo {
 
     std::vector<quiesce_stat> quiesce_stats() {
 	// if quiesce stat isn't enabled, it just returns an empty vector
-	return quiesce_stats_;
+	pthread_mutex_lock(&quiesce_stat_mutex_);
+	auto ret = quiesce_stats_;
+	pthread_mutex_unlock(&quiesce_stat_mutex_);
+	return ret;
     }
 
     // timestamps
@@ -462,6 +465,7 @@ class threadinfo {
     void* (*thread_func_)(threadinfo*);
     void* thread_data_;
 
+    pthread_mutex_t quiesce_stat_mutex_;
     bool enable_quiesce_stat_;
     std::vector<quiesce_stat> quiesce_stats_;
     void record_quiesce_stat(uint64_t min_epoch, unsigned int nr_freed,
@@ -470,7 +474,9 @@ class threadinfo {
 	    return;
 
 	quiesce_stat stat = quiesce_stat(min_epoch, nr_freed, start, end);
+	pthread_mutex_lock(&quiesce_stat_mutex_);
 	quiesce_stats_.push_back(stat);
+	pthread_mutex_unlock(&quiesce_stat_mutex_);
     }
 
     void refill_pool(int nl);
