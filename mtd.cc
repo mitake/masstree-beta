@@ -64,6 +64,9 @@
 #include <algorithm>
 #include <deque>
 #include <cfloat>
+#if HAVE_STAT_HTTP
+#include <microhttpd.h>
+#endif
 using lcdf::StringAccum;
 
 enum { CKState_Quit, CKState_Uninit, CKState_Ready, CKState_Go };
@@ -129,6 +132,10 @@ static void recovercheckpoint(threadinfo *ti);
 static void *canceling(void *);
 static void catchint(int);
 static void epochinc(int);
+
+#if HAVE_STAT_HTTP
+static void stat_http_start(int);
+#endif
 
 /* running local tests */
 void test_timeout(int) {
@@ -564,7 +571,11 @@ enum { clp_val_suffixdouble = Clp_ValFirstUser };
 enum { opt_nolog = 1, opt_pin, opt_logdir, opt_port, opt_ckpdir, opt_duration,
        opt_test, opt_test_name, opt_threads, opt_cores,
        opt_print, opt_norun, opt_checkpoint, opt_limit, opt_epoch_interval,
-       opt_quiesce_stat };
+       opt_quiesce_stat
+#if HAVE_STAT_HTTP
+       , opt_stat_http
+#endif
+};
 static const Clp_Option options[] = {
     { "no-log", 0, opt_nolog, 0, 0 },
     { 0, 'n', opt_nolog, 0, 0 },
@@ -595,6 +606,9 @@ static const Clp_Option options[] = {
     { "print", 0, opt_print, 0, Clp_Negate },
     { "epoch-interval", 0, opt_epoch_interval, Clp_ValDouble, 0 },
     { "quiesce-stat", 'q', opt_quiesce_stat, 0, Clp_Negate }
+#if HAVE_STAT_HTTP
+    , { "stat-http-port", 's', opt_stat_http, Clp_ValInt, 0}
+#endif
 };
 
 int
@@ -608,6 +622,9 @@ main(int argc, char *argv[])
   Clp_AddType(clp, clp_val_suffixdouble, Clp_DisallowOptions, clp_parse_suffixdouble, 0);
   int opt;
   double epoch_interval_ms = 1000;
+#if HAVE_STAT_HTTP
+  int stat_http_port = -1;
+#endif
   while ((opt = Clp_Next(clp)) >= 0) {
       switch (opt) {
       case opt_nolog:
@@ -692,6 +709,11 @@ main(int argc, char *argv[])
       case opt_quiesce_stat:
           enable_quiesce_stat = !clp->negated;
           break;
+#if HAVE_STAT_HTTP
+      case opt_stat_http:
+	  stat_http_port = clp->val.i;
+          break;
+#endif
       default:
           fprintf(stderr, "Usage: mtd [-np] [--ld dir1[,dir2,...]] [--cd dir1[,dir2,...]]\n");
           exit(EXIT_FAILURE);
@@ -824,6 +846,14 @@ main(int argc, char *argv[])
   assert(ret == 0);
   pthread_t tid;
   pthread_create(&tid, NULL, canceling, NULL);
+
+#if HAVE_STAT_HTTP
+
+  printf("stat_http_port: %d\n", stat_http_port);
+  if (stat_http_port != -1)
+    stat_http_start(stat_http_port);
+
+#endif
 
   static int next = 0;
   while(1){
@@ -1769,3 +1799,111 @@ void* conc_checkpointer(threadinfo* ti) {
   }
   return 0;
 }
+
+#if HAVE_STAT_HTTP
+
+// look at https://www.gnu.org/software/libmicrohttpd/
+#include <stdio.h>
+static int stat_cb(void *cls,
+		   struct MHD_Connection *connection,
+		   const char *url,
+		   const char *method,
+		   const char *version,
+		   const char *upload_data,
+		   size_t *upload_data_size,
+		   void **ptr)
+{
+  (void)cls;
+  (void)connection;
+  (void)version;
+  (void)upload_data;
+  (void)ptr;
+
+  if (0 != strcmp(method, "GET"))
+    return MHD_NO;
+
+  static int dummy;
+  if (&dummy != *ptr) {
+    // The first time only the headers are valid,
+    // do not respond in the first round...
+    *ptr = &dummy;
+    return MHD_YES;
+  }
+  if (0 != *upload_data_size)
+    return MHD_NO; /* upload data in a GET!? */
+
+  std::string page;
+
+  if (!strcmp(url, "/")) {
+    page =
+      "<html>\n"
+      "<head>\n"
+      "<title> masstree server stat </title>\n"
+      "</head>\n"
+      "<body>\n"
+      "masstree server stat<br>\n"
+      "<br>\n"
+      "profiles:<br>\n"
+      "<table>\n"
+      "<tr><td><a href=\"rcu-quiesce.json\">rcu-quiesce.json</a>\n"
+      "</table>\n"
+      "</body>\n"
+      "</html>\n";
+  } else if (!strcmp(url, "/rcu-quiesce.json")) {
+    Json results = Json::make_array();
+
+    for (threadinfo *ti = threadinfo::allthreads; ti; ti = ti->next()) {
+      Json result = Json::make_array();
+
+      std::vector<quiesce_stat> stats = ti->quiesce_stats();
+      if (!stats.size())
+	continue;
+
+      result.set("threadid", ti->threadid());
+      result.set("index", ti->index());
+      result.set("type", threadtype(ti->purpose()));
+
+      Json history = Json::make_array();
+      for (unsigned int i = 0; i < stats.size(); i++) {
+	if (stats[i].duration() < 0.001 || stats[i].nr_freed() < 1024)
+	  // skip small pause times, not interesting and result bloating JSON
+	  // TODO: custom filters?
+	  continue;
+
+	history.push_back(stats[i].to_json());
+	if (i == 10)		// FIXME: large json produces incorrect unparse() result?
+	  break;
+      }
+
+      if (!history.size())
+	continue;
+      result.set("history", history);
+      results.push_back(result);
+    }
+
+    page = results.unparse();
+  } else {
+    printf("unknown url: %s\n", url);
+    return MHD_NO;		// e.g. favicon.ico
+  }
+
+  const char *page_str = page.c_str();
+  struct MHD_Response *response = MHD_create_response_from_buffer(strlen(page_str),
+								  (void*) page_str,
+								  MHD_RESPMEM_PERSISTENT);
+  int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+  MHD_destroy_response(response);
+  return ret;
+}
+
+static void stat_http_start(int port)
+{
+  auto d = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION,
+			    port, NULL, NULL, &stat_cb, NULL, MHD_OPTION_END);
+  if (!d) {
+    printf("failed to create microhttp server\n");
+    exit(1);
+  }
+}
+
+#endif
