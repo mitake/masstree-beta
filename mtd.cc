@@ -941,6 +941,7 @@ canceling(void *)
 
 	    unsigned int min_nr_freed = UINT_MAX, max_nr_freed = 0;
 	    double min_duration = DBL_MAX, max_duration = 0;
+	    uint64_t max_epoch_delta = 0, prev_epoch = 0;
 	    for (auto stat: stats) {
 		unsigned int nr_freed = stat.nr_freed();
 		if (nr_freed < min_nr_freed)
@@ -953,6 +954,14 @@ canceling(void *)
 		    min_duration = duration;
 		if (max_duration < duration)
 		    max_duration = duration;
+
+		if (prev_epoch == 0)
+		  prev_epoch = stat.min_epoch();
+		else {
+		  uint64_t delta = stat.min_epoch() - prev_epoch;
+		  if (max_epoch_delta < delta)
+		    max_epoch_delta = delta;
+		}
 	    }
 
 	    if (min_nr_freed != UINT_MAX)
@@ -964,6 +973,9 @@ canceling(void *)
 		printf("minimum duration: %lf\n", min_duration);
 	    if (max_duration != 0)
 		printf("maximum duration: %lf\n", max_duration);
+
+	    if (max_epoch_delta != 0)
+	      printf("maximum delta of epoch: %lu\n", max_epoch_delta);
 	}
     }
 
