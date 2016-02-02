@@ -63,6 +63,7 @@
 #include "msgpack.hh"
 #include <algorithm>
 #include <deque>
+#include <sys/timerfd.h>
 using lcdf::StringAccum;
 
 enum { CKState_Quit, CKState_Uninit, CKState_Ready, CKState_Go };
@@ -110,6 +111,8 @@ kvtimestamp_t initial_timestamp;
 
 static pthread_cond_t checkpoint_cond;
 static pthread_mutex_t checkpoint_mu;
+
+static double epoch_interval_ms = 1000;
 
 static void prepare_thread(threadinfo *ti);
 static int* tcp_thread_pipes;
@@ -603,7 +606,7 @@ main(int argc, char *argv[])
   Clp_Parser *clp = Clp_NewParser(argc, argv, (int) arraysize(options), options);
   Clp_AddType(clp, clp_val_suffixdouble, Clp_DisallowOptions, clp_parse_suffixdouble, 0);
   int opt;
-  double epoch_interval_ms = 1000;
+
   while ((opt = Clp_Next(clp)) >= 0) {
       switch (opt) {
       case opt_nolog:
@@ -1005,7 +1008,7 @@ int onego(query<row_type>& q, Json& request, Str request_str, threadinfo& ti) {
 
 #if HAVE_SYS_EPOLL_H
 struct tcpfds {
-    int epollfd;
+    int epollfd, timerfd;
 
     tcpfds(int pipefd) {
         epollfd = epoll_create(10);
@@ -1041,6 +1044,32 @@ struct tcpfds {
     void remove(int fd) {
         int r = epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL);
         always_assert(r == 0);
+    }
+
+    void add_timer() {
+	timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+	always_assert(0 <= timerfd);
+
+	struct itimerspec it;
+	memset(&it, 0, sizeof(it));
+	it.it_value.tv_sec = epoch_interval_ms / 1000;
+	it.it_value.tv_nsec = fmod(epoch_interval_ms, 1000) * 1000000;
+	int r = timerfd_settime(timerfd, 0, &it, NULL);
+	always_assert(0 <= r);
+
+	struct epoll_event tev;
+	tev.events = EPOLLIN;
+	tev.data.ptr = nullptr;
+	r = epoll_ctl(epollfd, EPOLL_CTL_ADD, timerfd, &tev);
+    }
+
+    void do_timer() {
+	uint64_t val;
+	int ret = read(timerfd, &val, sizeof(val));
+	always_assert(ret == sizeof(val));
+	close(timerfd);
+
+	add_timer();
     }
 };
 #else
@@ -1117,11 +1146,29 @@ void* tcp_threadfunc(void* x) {
     std::deque<conn*> ready;
     query<row_type> q;
 
+    sloop.add_timer();
+
     while (1) {
         int nev = sloop.wait(events);
-        for (int i = 0; i < nev; i++)
+	bool timer_happened = false;
+
+        for (int i = 0; i < nev; i++) {
             if (conn *c = sloop.event_conn(events, i))
                 ready.push_back(c);
+	    else
+		// Assuming ev.data.ptr == nullptr, then the even comes from timer.
+		// Is this always correct?
+		timer_happened = true;
+	}
+
+	if (ready.empty() && timer_happened) {
+	    // Advance my epoch even if there's no requests for fine grained quiesce
+	    sloop.do_timer();
+	    ti->rcu_start();
+	    ti->rcu_stop();
+
+	    continue;
+	}
 
         while (!ready.empty()) {
             conn* c = ready.front();
