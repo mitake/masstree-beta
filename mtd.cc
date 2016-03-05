@@ -942,17 +942,22 @@ canceling(void *)
 
 	    printf("quiesce stat of thread %lx (index: %d, thread type: %s)\n",
 		   ti->threadid(), ti->index(), threadtype(ti->purpose()));
+	    printf("a number of recorded stats: %lu\n", stats.size());
 
 	    unsigned int min_nr_freed = UINT_MAX, max_nr_freed = 0;
+	    unsigned int nr_total_freed = 0;
 	    double min_duration = DBL_MAX, max_duration = 0;
+	    double total_duration = 0;
 	    for (auto stat: stats) {
 		unsigned int nr_freed = stat.nr_freed();
+		nr_total_freed += nr_freed;
 		if (nr_freed < min_nr_freed)
 		    min_nr_freed = nr_freed;
 		if (max_nr_freed < nr_freed)
 		    max_nr_freed = nr_freed;
 
 		double duration = stat.duration();
+		total_duration += duration;
 		if (duration < min_duration)
 		    min_duration = duration;
 		if (max_duration < duration)
@@ -964,10 +969,16 @@ canceling(void *)
 	    if (max_nr_freed != 0)
 		printf("a number of maximum freed limbo objects: %u\n", max_nr_freed);
 
+	    printf("total number of freed objects: %u\n", nr_total_freed);
+	    printf("average number of freed objects: %lu\n", nr_total_freed / stats.size());
+
 	    if (min_duration != DBL_MAX)
 		printf("minimum duration: %lf\n", min_duration);
 	    if (max_duration != 0)
 		printf("maximum duration: %lf\n", max_duration);
+
+	    printf("total duration: %lf\n", total_duration);
+	    printf("average duration: %lf\n", total_duration / stats.size());
 	}
     }
 
