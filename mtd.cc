@@ -982,6 +982,10 @@ canceling(void *)
 	}
     }
 
+    for (threadinfo *ti = threadinfo::allthreads; ti; ti = ti->next()) {
+      ti->report_occ_retry_stat();
+    }
+
     exit(0);
 }
 

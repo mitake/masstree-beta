@@ -430,6 +430,24 @@ class threadinfo {
     void report_rcu(void *ptr) const;
     static void report_rcu_all(void *ptr);
 
+  void record_occ_retry(int nr_retry) {
+    total_nr_occ_retry_ += nr_retry;
+
+    if (max_nr_occ_retry_ < nr_retry)
+      max_nr_occ_retry_ = nr_retry;
+
+    occ_retry_record_count_++;
+  }
+
+  void report_occ_retry_stat() {
+    if (!occ_retry_record_count_)
+      return;
+
+    printf("recored retry: %lu\n", occ_retry_record_count_);
+    printf("total number of reader side retry: %lu\n", total_nr_occ_retry_);
+    printf("a number of maximum retry: %d\n", max_nr_occ_retry_);
+  }
+
   private:
     union {
         struct {
@@ -472,6 +490,10 @@ class threadinfo {
 	quiesce_stat stat = quiesce_stat(min_epoch, nr_freed, start, end);
 	quiesce_stats_.push_back(stat);
     }
+
+  unsigned long int total_nr_occ_retry_;
+  unsigned long int occ_retry_record_count_;
+  int max_nr_occ_retry_;
 
     void refill_pool(int nl);
     void refill_rcu();

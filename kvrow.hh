@@ -133,6 +133,9 @@ void query<R>::run_get(T& table, Json& req, threadinfo& ti) {
         req.resize(2);
         emit_fields(lp.value(), req, ti);
     }
+
+    if (nr_retry)
+      ti.record_occ_retry(nr_retry);
 }
 
 template <typename R> template <typename T>
@@ -144,6 +147,10 @@ bool query<R>::run_get1(T& table, Str key, int col, Str& value, threadinfo& ti) 
         found = false;
     if (found)
         value = lp.value()->col(col);
+
+    if (nr_retry)
+      ti.record_occ_retry(nr_retry);
+
     return found;
 }
 
