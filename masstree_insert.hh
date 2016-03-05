@@ -22,7 +22,8 @@ namespace Masstree {
 template <typename P>
 bool tcursor<P>::find_insert(threadinfo& ti)
 {
-    find_locked(ti);
+  int nr_retry = 0;
+  find_locked(ti, nr_retry);
     original_n_ = n_;
     original_v_ = n_->full_unlocked_version_value();
 
@@ -155,7 +156,8 @@ template <typename P> template <typename F>
 inline int basic_table<P>::modify(Str key, F& f, threadinfo& ti)
 {
     tcursor<P> lp(*this, key);
-    bool found = lp.find_locked(ti);
+    int nr_retry = 0;
+    bool found = lp.find_locked(ti, nr_retry);
     int answer;
     if (found)
         answer = f(key, true, lp.value(), ti, lp.node_timestamp());

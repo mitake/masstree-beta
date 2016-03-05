@@ -20,13 +20,15 @@
 namespace Masstree {
 
 template <typename P>
-bool unlocked_tcursor<P>::find_unlocked(threadinfo& ti)
+bool unlocked_tcursor<P>::find_unlocked(threadinfo& ti, int& nr_retry)
 {
     int match;
     key_indexed_position kx;
     node_base<P>* root = const_cast<node_base<P>*>(root_);
 
+    nr_retry = -1;
  retry:
+    nr_retry++;
     n_ = root->reach_leaf(ka_, v_, ti);
 
  forward:
@@ -61,20 +63,24 @@ inline bool basic_table<P>::get(Str key, value_type &value,
                                 threadinfo& ti) const
 {
     unlocked_tcursor<P> lp(*this, key);
-    bool found = lp.find_unlocked(ti);
+    int nr_retry;
+    bool found = lp.find_unlocked(ti, nr_retry);
     if (found)
         value = lp.value();
     return found;
 }
 
 template <typename P>
-bool tcursor<P>::find_locked(threadinfo& ti)
+bool tcursor<P>::find_locked(threadinfo& ti, int& nr_retry)
 {
     node_base<P>* root = const_cast<node_base<P>*>(root_);
     nodeversion_type v;
     permuter_type perm;
 
+    nr_retry = -1;
+
  retry:
+    nr_retry++;
     n_ = root->reach_leaf(ka_, v, ti);
 
  forward:

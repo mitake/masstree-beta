@@ -122,7 +122,8 @@ void query<R>::emit_fields1(const R* value, Json& req, threadinfo& ti) {
 template <typename R> template <typename T>
 void query<R>::run_get(T& table, Json& req, threadinfo& ti) {
     typename T::unlocked_cursor_type lp(table, req[2].as_s());
-    bool found = lp.find_unlocked(ti);
+    int nr_retry = 0;
+    bool found = lp.find_unlocked(ti, nr_retry);
     if (found && row_is_marker(lp.value()))
         found = false;
     if (found) {
@@ -137,7 +138,8 @@ void query<R>::run_get(T& table, Json& req, threadinfo& ti) {
 template <typename R> template <typename T>
 bool query<R>::run_get1(T& table, Str key, int col, Str& value, threadinfo& ti) {
     typename T::unlocked_cursor_type lp(table, key);
-    bool found = lp.find_unlocked(ti);
+    int nr_retry = 0;
+    bool found = lp.find_unlocked(ti, nr_retry);
     if (found && row_is_marker(lp.value()))
         found = false;
     if (found)
@@ -236,7 +238,8 @@ inline bool query<R>::apply_replace(R*& value, bool found, Str new_value,
 template <typename R> template <typename T>
 bool query<R>::run_remove(T& table, Str key, threadinfo& ti) {
     typename T::cursor_type lp(table, key);
-    bool found = lp.find_locked(ti);
+    int nr_retry = 0;
+    bool found = lp.find_locked(ti, nr_retry);
     if (found)
         apply_remove(lp.value(), lp.node_timestamp(), ti);
     lp.finish(-1, ti);

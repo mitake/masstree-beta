@@ -23,7 +23,8 @@ namespace Masstree {
 template <typename P>
 bool tcursor<P>::gc_layer(threadinfo& ti)
 {
-    find_locked(ti);
+  int nr_retry = 0;
+  find_locked(ti, nr_retry);
     masstree_precondition(!n_->deleted() && !n_->deleted_layer());
 
     // find_locked might return early if another gc_layer attempt has
