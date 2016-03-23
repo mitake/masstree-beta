@@ -63,6 +63,7 @@
 #include "msgpack.hh"
 #include <algorithm>
 #include <deque>
+#include <sys/timerfd.h>
 #include <cfloat>
 #if HAVE_STAT_HTTP
 #include <microhttpd.h>
@@ -116,6 +117,8 @@ bool enable_quiesce_stat = false;
 
 static pthread_cond_t checkpoint_cond;
 static pthread_mutex_t checkpoint_mu;
+
+static double epoch_interval_ms = 1000;
 
 static void prepare_thread(threadinfo *ti);
 static int* tcp_thread_pipes;
@@ -625,6 +628,7 @@ main(int argc, char *argv[])
 #if HAVE_STAT_HTTP
   int stat_http_port = -1;
 #endif
+
   while ((opt = Clp_Next(clp)) >= 0) {
       switch (opt) {
       case opt_nolog:
@@ -978,6 +982,7 @@ canceling(void *)
 	    unsigned int nr_total_freed = 0;
 	    double min_duration = DBL_MAX, max_duration = 0;
 	    double total_duration = 0;
+	    uint64_t max_epoch_delta = 0, prev_epoch = 0;
 	    for (auto stat: stats) {
 		unsigned int nr_freed = stat.nr_freed();
 		nr_total_freed += nr_freed;
@@ -992,6 +997,14 @@ canceling(void *)
 		    min_duration = duration;
 		if (max_duration < duration)
 		    max_duration = duration;
+
+		if (prev_epoch == 0)
+		  prev_epoch = stat.min_epoch();
+		else {
+		  uint64_t delta = stat.min_epoch() - prev_epoch;
+		  if (max_epoch_delta < delta)
+		    max_epoch_delta = delta;
+		}
 	    }
 
 	    if (min_nr_freed != UINT_MAX)
@@ -1009,6 +1022,8 @@ canceling(void *)
 
 	    printf("total duration: %lf\n", total_duration);
 	    printf("average duration: %lf\n", total_duration / stats.size());
+	    if (max_epoch_delta != 0)
+	      printf("maximum delta of epoch: %lu\n", max_epoch_delta);
 	}
     }
 
@@ -1105,7 +1120,7 @@ int onego(query<row_type>& q, Json& request, Str request_str, threadinfo& ti) {
 
 #if HAVE_SYS_EPOLL_H
 struct tcpfds {
-    int epollfd;
+    int epollfd, timerfd;
 
     tcpfds(int pipefd) {
         epollfd = epoll_create(10);
@@ -1141,6 +1156,32 @@ struct tcpfds {
     void remove(int fd) {
         int r = epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL);
         always_assert(r == 0);
+    }
+
+    void add_timer() {
+	timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+	always_assert(0 <= timerfd);
+
+	struct itimerspec it;
+	memset(&it, 0, sizeof(it));
+	it.it_value.tv_sec = epoch_interval_ms / 1000;
+	it.it_value.tv_nsec = fmod(epoch_interval_ms, 1000) * 1000000;
+	int r = timerfd_settime(timerfd, 0, &it, NULL);
+	always_assert(0 <= r);
+
+	struct epoll_event tev;
+	tev.events = EPOLLIN;
+	tev.data.ptr = nullptr;
+	r = epoll_ctl(epollfd, EPOLL_CTL_ADD, timerfd, &tev);
+    }
+
+    void do_timer() {
+	uint64_t val;
+	int ret = read(timerfd, &val, sizeof(val));
+	always_assert(ret == sizeof(val));
+	close(timerfd);
+
+	add_timer();
     }
 };
 #else
@@ -1215,11 +1256,29 @@ void* tcp_threadfunc(threadinfo* ti) {
     std::deque<conn*> ready;
     query<row_type> q;
 
+    sloop.add_timer();
+
     while (1) {
         int nev = sloop.wait(events);
-        for (int i = 0; i < nev; i++)
+	bool timer_happened = false;
+
+        for (int i = 0; i < nev; i++) {
             if (conn *c = sloop.event_conn(events, i))
                 ready.push_back(c);
+	    else
+		// Assuming ev.data.ptr == nullptr, then the even comes from timer.
+		// Is this always correct?
+		timer_happened = true;
+	}
+
+	if (ready.empty() && timer_happened) {
+	    // Advance my epoch even if there's no requests for fine grained quiesce
+	    sloop.do_timer();
+	    ti->rcu_start();
+	    ti->rcu_stop();
+
+	    continue;
+	}
 
         while (!ready.empty()) {
             conn* c = ready.front();

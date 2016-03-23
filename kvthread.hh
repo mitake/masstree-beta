@@ -217,7 +217,10 @@ public:
     double duration() {
 	return duration_;
     }
-	
+
+    uint64_t min_epoch() {
+      return min_epoch_;
+    }
 };
 
 class threadinfo {
