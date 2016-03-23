@@ -1016,6 +1016,13 @@ canceling(void *)
       ti->report_occ_retry_stat();
     }
 
+    for (threadinfo *ti = threadinfo::allthreads; ti; ti = ti->next()) {
+      printf("limbo stat of thread %lx (index: %d, thread type: %s)\n",
+	     ti->threadid(), ti->index(), threadtype(ti->purpose()));
+
+      ti->report_limbo_stat();
+    }
+
     exit(0);
 }
 

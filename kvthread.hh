@@ -451,6 +451,14 @@ class threadinfo {
     printf("a number of maximum retry: %d\n", max_nr_occ_retry_);
   }
 
+  void report_limbo_stat() {
+    int nr_limbo_groups = 0;
+    for (limbo_group *p = limbo_head_; p != limbo_tail_; p = p->next_) {
+      nr_limbo_groups++;
+    }
+    printf("total limbo groups: %d\n", nr_limbo_groups);
+  }
+
   private:
     union {
         struct {
