@@ -409,9 +409,7 @@ class threadinfo {
             gc_epoch_ = globalepoch;
     }
     void rcu_stop() {
-        if (limbo_epoch_ && (gc_epoch_ - limbo_epoch_) > 1)
-            hard_rcu_quiesce();
-        gc_epoch_ = 0;
+      hard_rcu_quiesce();
     }
     void rcu_quiesce() {
         rcu_start();

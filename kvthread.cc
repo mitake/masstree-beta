@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #endif
+#include <math.h>
 
 threadinfo *threadinfo::allthreads;
 #if ENABLE_ASSERTIONS
@@ -145,9 +146,10 @@ void threadinfo::hard_rcu_quiesce()
     uint64_t min_epoch = gc_epoch_;
     for (threadinfo *ti = allthreads; ti; ti = ti->next()) {
         prefetch((const void *) ti->next());
-        uint64_t epoch = ti->gc_epoch_;
-        if (epoch && (int64_t) (epoch - min_epoch) < 0)
-            min_epoch = epoch;
+	if (!ti->gc_epoch_)
+	  continue;
+
+	min_epoch = std::min(min_epoch, ti->gc_epoch_);
     }
 
     limbo_group *lg = limbo_head_;
@@ -157,7 +159,14 @@ void threadinfo::hard_rcu_quiesce()
     double quiesce_start = now();
     unsigned int nr_freed = 0;
 
-    if (lb != le && (int64_t) (lb->epoch_ - min_epoch) < 0) {
+    if (lb == le && lg->next_) {
+      lg->head_ = lg->tail_ = 0;
+      lg = lg->next_;
+      lb = &lg->e_[lg->head_];
+      le = &lg->e_[lg->tail_];
+    }
+
+    if (lb != le && (int64_t) (lb->epoch_ - min_epoch) <= 0) {
         while (1) {
             free_rcu(lb->ptr_, lb->freetype_);
             mark(tc_gc);
@@ -174,7 +183,7 @@ void threadinfo::hard_rcu_quiesce()
                 lg = lg->next_;
                 lb = &lg->e_[lg->head_];
                 le = &lg->e_[lg->tail_];
-            } else if (lb->epoch_ < min_epoch) {
+            } else if (lb->epoch_ <= min_epoch) {
                 lg->head_ = lb - lg->e_;
                 break;
             }
@@ -194,8 +203,6 @@ void threadinfo::hard_rcu_quiesce()
             *last = 0;
         }
     }
-
-    limbo_epoch_ = (lb == le ? 0 : lb->epoch_);
 
     double quiesce_end = now();
     record_quiesce_stat(min_epoch, nr_freed, quiesce_start, quiesce_end);
