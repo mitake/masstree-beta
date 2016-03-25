@@ -92,32 +92,21 @@ void threadinfo::hard_rcu_quiesce() {
             ++lb;
 
             if (lb == le && lg == limbo_tail_) {
+                assert(!lg->next_);
                 lg->head_ = lg->tail_;
                 break;
             } else if (lb == le) {
                 assert(lg->tail_ == lg->capacity && lg->next_);
-                lg->head_ = lg->tail_ = 0;
-                lg = lg->next_;
+                limbo_group *old = lg;
+                limbo_head_ = lg = lg->next_;
                 lb = &lg->e_[lg->head_];
                 le = &lg->e_[lg->tail_];
+
+		deallocate(old, sizeof(limbo_group), memtag_limbo);
             } else if (lb->epoch_ < min_epoch) {
                 lg->head_ = lb - lg->e_;
                 break;
             }
-        }
-
-        if (lg != limbo_head_) {
-            // shift nodes in [limbo_head_, limbo_tail_) to be after
-            // limbo_tail_
-            limbo_group *old_head = limbo_head_;
-            limbo_head_ = lg;
-            limbo_group **last = &limbo_tail_->next_;
-            while (*last)
-                last = &(*last)->next_;
-            *last = old_head;
-            while (*last != lg)
-                last = &(*last)->next_;
-            *last = 0;
         }
     }
 
