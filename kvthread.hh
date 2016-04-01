@@ -55,10 +55,6 @@ struct limbo_group {
     limbo_group()
         : head_(0), tail_(0), next_() {
     }
-    epoch_type first_epoch() const {
-        assert(head_ != tail_);
-        return e_[head_].u_.epoch;
-    }
     void push_back(void* ptr, memtag tag, mrcu_epoch_type epoch) {
         assert(tail_ + 2 <= capacity);
         if (head_ == tail_ || epoch_ != epoch) {
@@ -71,7 +67,7 @@ struct limbo_group {
         e_[tail_].u_.tag = tag;
         ++tail_;
     }
-    inline unsigned clean_until(threadinfo& ti, mrcu_epoch_type epoch_bound, unsigned count);
+    inline bool clean_until(threadinfo& ti, mrcu_epoch_type max_epoch);
 };
 
 template <int N> struct has_threadcounter {
@@ -147,10 +143,6 @@ class threadinfo {
     void mark(threadcounter ci, int64_t delta) {
         if (has_threadcounter<int(ncounters)>::test(ci))
             counters_[ci] += delta;
-    }
-    void set_counter(threadcounter ci, uint64_t value) {
-        if (has_threadcounter<int(ncounters)>::test(ci))
-            counters_[ci] = value;
     }
     bool has_counter(threadcounter ci) const {
         return has_threadcounter<int(ncounters)>::test(ci);
@@ -259,19 +251,18 @@ class threadinfo {
     }
 
     // RCU
-    enum { rcu_free_count = 128 }; // max # of entries to free per rcu_quiesce() call
     void rcu_start() {
         if (gc_epoch_ != globalepoch)
             gc_epoch_ = globalepoch;
     }
     void rcu_stop() {
-        if (perform_gc_epoch_ != active_epoch)
+        if (limbo_epoch_ && (gc_epoch_ - limbo_epoch_) > 1)
             hard_rcu_quiesce();
         gc_epoch_ = 0;
     }
     void rcu_quiesce() {
         rcu_start();
-        if (perform_gc_epoch_ != active_epoch)
+        if (limbo_epoch_ && (gc_epoch_ - limbo_epoch_) > 2)
             hard_rcu_quiesce();
     }
     typedef ::mrcu_callback mrcu_callback;
@@ -295,7 +286,7 @@ class threadinfo {
     union {
         struct {
             mrcu_epoch_type gc_epoch_;
-            mrcu_epoch_type perform_gc_epoch_;
+            mrcu_epoch_type limbo_epoch_;
             loginfo *logger_;
 
             threadinfo *next_;
@@ -341,6 +332,8 @@ class threadinfo {
             refill_rcu();
         uint64_t epoch = globalepoch;
         limbo_tail_->push_back(ptr, tag, epoch);
+        if (!limbo_epoch_)
+            limbo_epoch_ = epoch;
     }
 
 #if ENABLE_ASSERTIONS
