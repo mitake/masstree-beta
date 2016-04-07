@@ -40,6 +40,7 @@ inline threadinfo::threadinfo(int purpose, int index, bool enable_quiesce_stat) 
     ts_ = 2;
 
     enable_quiesce_stat_ = enable_quiesce_stat;
+    pthread_mutex_init(&quiesce_stat_mutex_, 0);
 }
 
 threadinfo *threadinfo::make(int purpose, int index, bool enable_quiesce_stat) {

@@ -406,6 +406,17 @@ fi
 
 AC_DEFINE_UNQUOTED([CACHE_LINE_SIZE], [64], [Assumed size of a cache line.])
 
+AC_ARG_ENABLE([stat-http],
+    [AS_HELP_STRING([--enable-stat-http],
+            [enable exporting stat with http])])
+if test "$enable_stat_http" = no; then
+    AC_DEFINE_UNQUOTED([HAVE_STAT_HTTP], [0], [Define to enable exporting stat with http.])
+else
+    AC_DEFINE_UNQUOTED([HAVE_STAT_HTTP], [1], [Define to enable exporting stat with http.])
+    AC_CHECK_HEADERS([microhttpd.h])
+    LDFLAGS+=" -lmicrohttpd"
+fi
+
 AH_TOP([#ifndef MASSTREE_CONFIG_H_INCLUDED
 #define MASSTREE_CONFIG_H_INCLUDED 1])
 
