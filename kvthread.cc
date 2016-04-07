@@ -29,24 +29,72 @@ threadinfo *threadinfo::allthreads;
 int threadinfo::no_pool_value;
 #endif
 
-inline threadinfo::threadinfo(int purpose, int index, bool enable_quiesce_stat) {
+inline threadinfo::threadinfo(int purpose, int index, bool enable_quiesce_stat, bool async_quiesce) {
     memset(this, 0, sizeof(*this));
     purpose_ = purpose;
     index_ = index;
 
     void *limbo_space = allocate(sizeof(limbo_group), memtag_limbo);
     mark(tc_limbo_slots, limbo_group::capacity);
-    limbo_head_ = limbo_tail_ = new(limbo_space) limbo_group;
+    limbo_head_ = limbo_tail_ = new(limbo_space) limbo_group(async_quiesce_, async_quiesce_ ? globalepoch : 0);
     ts_ = 2;
 
     enable_quiesce_stat_ = enable_quiesce_stat;
+    async_quiesce_ = async_quiesce;
     pthread_mutex_init(&quiesce_stat_mutex_, 0);
+
+    pthread_mutex_init(&async_limbo_group_lock_, NULL);
+    pthread_cond_init(&async_limbo_group_cond_, NULL);
+
+    pthread_mutex_init(&pool_lock_, NULL);
 }
 
-threadinfo *threadinfo::make(int purpose, int index, bool enable_quiesce_stat) {
+static void *async_quiesce_thread(void *arg) {
+  struct threadinfo *ti = static_cast<struct threadinfo *>(arg);
+
+  while (true) {
+    pthread_mutex_lock(&ti->async_limbo_group_lock_);
+
+  retry:
+    if (ti->async_limbo_queue_.empty()) {
+      struct timespec wait;
+      struct timeval now;
+
+      gettimeofday(&now, NULL);
+      wait.tv_sec = now.tv_sec + 1;		// TODO: configurable?
+      wait.tv_nsec = 0;
+      pthread_mutex_unlock(&ti->async_limbo_group_lock_);
+      pthread_cond_timedwait(&ti->async_limbo_group_cond_, &ti->async_limbo_group_lock_, &wait);
+      // pthread_cond_wait(&ti->async_limbo_group_cond_, &ti->async_limbo_group_lock_);
+
+      goto retry;
+    }
+
+    std::vector<struct limbo_group *> q = ti->async_limbo_queue_;
+    ti->async_limbo_queue_.clear();
+    pthread_mutex_unlock(&ti->async_limbo_group_lock_);
+    int nr_freed = 0;
+    for (auto lg: q) {
+      auto hd = lg->head_;
+      auto tl = lg->tail_;
+      while (hd != tl) {
+	ti->free_rcu(lg->e_[hd].ptr_, lg->e_[hd].u_.tag);
+	ti->mark(tc_gc);
+	hd++;
+	nr_freed++;
+      }
+      
+      ti->deallocate(lg, sizeof(limbo_group), memtag_limbo);
+    }
+  }
+
+  return NULL;
+}
+
+threadinfo *threadinfo::make(int purpose, int index, bool enable_quiesce_stat, bool async_quiesce) {
     static int threads_initialized;
 
-    threadinfo* ti = new(malloc(8192)) threadinfo(purpose, index, enable_quiesce_stat);
+    threadinfo* ti = new(malloc(8192)) threadinfo(purpose, index, enable_quiesce_stat, async_quiesce);
     ti->next_ = allthreads;
     allthreads = ti;
 
@@ -58,20 +106,38 @@ threadinfo *threadinfo::make(int purpose, int index, bool enable_quiesce_stat) {
         threads_initialized = 1;
     }
 
+    if (async_quiesce) {
+      pthread_t async_quiesce_tid;
+      int ret = pthread_create(&async_quiesce_tid, NULL, async_quiesce_thread, ti);
+      if (ret != 0) {
+	printf("failed to create a thread for async rcu quiesce: %m\n");
+	exit(1);
+      }
+    }
+
     return ti;
 }
 
 void threadinfo::refill_rcu() {
+  if (limbo_tail_) {
     if (!limbo_tail_->next_) {
-        void *limbo_space = allocate(sizeof(limbo_group), memtag_limbo);
-        mark(tc_limbo_slots, limbo_group::capacity);
-        limbo_tail_->next_ = new(limbo_space) limbo_group;
+      void *limbo_space = allocate(sizeof(limbo_group), memtag_limbo);
+      mark(tc_limbo_slots, limbo_group::capacity);
+      limbo_tail_->next_ = new(limbo_space) limbo_group(async_quiesce_, async_quiesce_ ? globalepoch : 0);
     }
     limbo_tail_ = limbo_tail_->next_;
-    assert(limbo_tail_->head_ == 0 && limbo_tail_->tail_ == 0);
+  } else {
+    assert(!limbo_head_);
+    void *limbo_space = allocate(sizeof(limbo_group), memtag_limbo);
+    mark(tc_limbo_slots, limbo_group::capacity);
+    limbo_head_ = limbo_tail_ = new(limbo_space) limbo_group(async_quiesce_, async_quiesce_ ? globalepoch : 0);
+  }
+  assert(limbo_tail_->head_ == 0 && limbo_tail_->tail_ == 0);
 }
 
 inline bool limbo_group::clean_until(threadinfo& ti, mrcu_epoch_type max_epoch, unsigned int& nr_freed) {
+  assert(!async_);
+
     while (head_ != tail_ && mrcu_signed_epoch_type(max_epoch - e_[head_].u_.epoch) > 0) {
         ++head_;
         while (head_ != tail_ && e_[head_].ptr_) {
@@ -97,28 +163,50 @@ void threadinfo::hard_rcu_quiesce() {
     double quiesce_start = now();
     unsigned int nr_freed = 0;
 
-    // clean [limbo_head_, limbo_tail_]
-    while (limbo_head_->clean_until(*this, max_epoch, nr_freed)) {
+    if (!async_quiesce_) {
+      // clean [limbo_head_, limbo_tail_]
+      while (limbo_head_->clean_until(*this, max_epoch, nr_freed)) {
         if (!empty_head)
-            empty_head = limbo_head_;
+	  empty_head = limbo_head_;
         empty_tail = limbo_head_;
         if (limbo_head_ == limbo_tail_) {
-            limbo_head_ = limbo_tail_ = empty_head;
-            goto done;
+	  limbo_head_ = limbo_tail_ = empty_head;
+	  goto done;
         }
         limbo_head_ = limbo_head_->next_;
-    }
-    // hook empties after limbo_tail_
-    if (empty_head) {
+      }
+      // hook empties after limbo_tail_
+      if (empty_head) {
         empty_tail->next_ = limbo_tail_->next_;
         limbo_tail_->next_ = empty_head;
-    }
+      }
 
-done:
-    if (limbo_head_->head_ != limbo_head_->tail_)
+    done:
+      if (limbo_head_->head_ != limbo_head_->tail_)
         limbo_epoch_ = limbo_head_->e_[limbo_head_->head_].u_.epoch;
-    else
+      else
         limbo_epoch_ = 0;
+    } else {
+      while (limbo_head_ && (mrcu_signed_epoch_type(max_epoch - limbo_head_->epoch_) > 0)) {
+	struct limbo_group *next = limbo_head_->next_;
+
+	pthread_mutex_lock(&async_limbo_group_lock_);// not lock free
+	async_limbo_queue_.push_back(limbo_head_);
+	pthread_mutex_unlock(&async_limbo_group_lock_);
+        pthread_cond_signal(&async_limbo_group_cond_);
+
+	limbo_head_ = next;
+	if (!limbo_head_) {
+	  limbo_tail_ = nullptr;
+	  refill_rcu();
+	}
+      }
+
+      if (limbo_head_ && (limbo_head_->head_ != limbo_head_->tail_))
+        limbo_epoch_ = limbo_head_->e_[limbo_head_->head_].u_.epoch;
+      else
+        limbo_epoch_ = 0;
+    }
 
     double quiesce_end = now();
     record_quiesce_stat(max_epoch, nr_freed, quiesce_start, quiesce_end);

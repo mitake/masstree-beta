@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <stdlib.h>
+#include <vector>
 
 class threadinfo;
 class loginfo;
@@ -50,15 +51,16 @@ struct limbo_group {
     enum { capacity = (4076 - sizeof(epoch_type) - sizeof(limbo_group*)) / sizeof(limbo_element) };
     unsigned head_;
     unsigned tail_;
-    epoch_type epoch_;
     limbo_group* next_;
     limbo_element e_[capacity];
-    limbo_group()
-        : head_(0), tail_(0), next_() {
-    }
+  bool async_;
+  epoch_type epoch_;
+  limbo_group(bool async, epoch_type epoch)
+    : head_(0), tail_(0), next_(), async_(async), epoch_(epoch) {
+  }
     void push_back(void* ptr, memtag tag, mrcu_epoch_type epoch) {
         assert(tail_ + 2 <= capacity);
-        if (head_ == tail_ || epoch_ != epoch) {
+        if (!async_ && (head_ == tail_ || epoch_ != epoch)) {
             e_[tail_].ptr_ = nullptr;
             e_[tail_].u_.epoch = epoch;
             epoch_ = epoch;
@@ -133,7 +135,7 @@ class threadinfo {
         return next_;
     }
 
-  static threadinfo* make(int purpose, int index, bool enable_quiesce_stat);
+  static threadinfo* make(int purpose, int index, bool enable_quiesce_stat, bool async_quiesce);
     // XXX destructor
 
     // thread information
@@ -260,6 +262,10 @@ class threadinfo {
     void* pool_allocate(size_t sz, memtag tag) {
         int nl = (sz + memdebug_size + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE;
         assert(nl <= pool_max_nlines);
+
+	if (async_quiesce_)
+	  pthread_mutex_lock(&pool_lock_);
+
         if (unlikely(!pool_[nl - 1]))
             refill_pool(nl);
         void* p = pool_[nl - 1];
@@ -269,6 +275,10 @@ class threadinfo {
             mark(threadcounter(tc_alloc + (tag > memtag_value)),
                  nl * CACHE_LINE_SIZE);
         }
+
+	if (async_quiesce_)
+	  pthread_mutex_unlock(&pool_lock_);
+
         return p;
     }
     void pool_deallocate(void* p, size_t sz, memtag tag) {
@@ -276,8 +286,14 @@ class threadinfo {
         assert(p && nl <= pool_max_nlines);
         p = memdebug::check_free(p, sz, memtag(tag + nl));
         if (use_pool()) {
+	  if (async_quiesce_)
+	    pthread_mutex_lock(&pool_lock_);
+
             *reinterpret_cast<void **>(p) = pool_[nl - 1];
             pool_[nl - 1] = p;
+
+	  if (async_quiesce_)
+	    pthread_mutex_unlock(&pool_lock_);
         } else
             free(p);
         mark(threadcounter(tc_alloc + (tag > memtag_value)),
@@ -324,7 +340,33 @@ class threadinfo {
     static void report_rcu_all(void* ptr);
     static inline mrcu_epoch_type min_active_epoch();
 
+  std::vector<struct limbo_group *> async_limbo_queue_;
+  pthread_mutex_t async_limbo_group_lock_;
+  pthread_cond_t async_limbo_group_cond_;
+
+    void free_rcu(void *p, memtag tag) {
+        if ((tag & memtag_pool_mask) == 0) {
+            p = memdebug::check_free_after_rcu(p, tag);
+            ::free(p);
+        } else if (tag == memtag(-1))
+            (*static_cast<mrcu_callback*>(p))(*this);
+        else {
+	  if (async_quiesce_)
+	    pthread_mutex_lock(&pool_lock_);
+
+            p = memdebug::check_free_after_rcu(p, tag);
+            int nl = tag & memtag_pool_mask;
+            *reinterpret_cast<void**>(p) = pool_[nl - 1];
+            pool_[nl - 1] = p;
+
+	    if (async_quiesce_)
+	      pthread_mutex_unlock(&pool_lock_);
+        }
+    }
+
   private:
+  pthread_mutex_t pool_lock_;
+
     union {
         struct {
             mrcu_epoch_type gc_epoch_;
@@ -369,23 +411,14 @@ class threadinfo {
     void refill_pool(int nl);
     void refill_rcu();
 
-    void free_rcu(void *p, memtag tag) {
-        if ((tag & memtag_pool_mask) == 0) {
-            p = memdebug::check_free_after_rcu(p, tag);
-            ::free(p);
-        } else if (tag == memtag(-1))
-            (*static_cast<mrcu_callback*>(p))(*this);
-        else {
-            p = memdebug::check_free_after_rcu(p, tag);
-            int nl = tag & memtag_pool_mask;
-            *reinterpret_cast<void**>(p) = pool_[nl - 1];
-            pool_[nl - 1] = p;
-        }
-    }
-
     void record_rcu(void* ptr, memtag tag) {
+      if (async_quiesce_) {
+        if (globalepoch != limbo_tail_->epoch_ || limbo_tail_->tail_ + 2 > limbo_tail_->capacity)
+	  refill_rcu();
+      } else {
         if (limbo_tail_->tail_ + 2 > limbo_tail_->capacity)
-            refill_rcu();
+	  refill_rcu();
+      }
         uint64_t epoch = globalepoch;
         limbo_tail_->push_back(ptr, tag, epoch);
         if (!limbo_epoch_)
@@ -403,11 +436,12 @@ class threadinfo {
 #endif
     }
 
-  inline threadinfo(int purpose, int index, bool enable_quiesce_stat);
+  inline threadinfo(int purpose, int index, bool enable_quiesce_stat, bool async_quiesce);
     threadinfo(const threadinfo&) = delete;
     ~threadinfo() {}
     threadinfo& operator=(const threadinfo&) = delete;
 
+    bool async_quiesce_;
     void hard_rcu_quiesce();
 
     friend struct limbo_group;

@@ -676,7 +676,7 @@ static struct {
 void runtest(int nthreads, void* (*func)(void*)) {
     std::vector<threadinfo*> tis;
     for (int i = 0; i < nthreads; ++i)
-      tis.push_back(threadinfo::make(threadinfo::TI_PROCESS, i, false));
+      tis.push_back(threadinfo::make(threadinfo::TI_PROCESS, i, false, false));
     signal(SIGALRM, test_timeout);
     for (int i = 0; i < nthreads; ++i) {
         int r = pthread_create(&tis[i]->pthread(), 0, func, tis[i]);
@@ -1041,7 +1041,7 @@ Try 'mttest --help' for options.\n");
 }
 
 static void run_one_test_body(int trial, const char *treetype, const char *test) {
-  threadinfo *main_ti = threadinfo::make(threadinfo::TI_MAIN, -1, false);
+  threadinfo *main_ti = threadinfo::make(threadinfo::TI_MAIN, -1, false, false);
     main_ti->pthread() = pthread_self();
     globalepoch = active_epoch = timestamp() >> 16;
     for (int i = 0; i < (int) arraysize(test_thread_map); ++i)

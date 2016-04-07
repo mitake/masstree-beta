@@ -114,6 +114,7 @@ static int rec_state = REC_NONE;
 kvtimestamp_t initial_timestamp;
 
 bool enable_quiesce_stat = false;
+bool async_quiesce = false;
 static int stat_http_port = -1;
 
 static pthread_cond_t checkpoint_cond;
@@ -451,7 +452,7 @@ void runtest(const char *testname, int nthreads) {
     std::vector<kvtest_client> clients(nthreads, kvtest_client(testname));
     ::testthreads = nthreads;
     for (int i = 0; i < nthreads; ++i)
-      clients[i].set_thread(threadinfo::make(threadinfo::TI_PROCESS, i, false));
+      clients[i].set_thread(threadinfo::make(threadinfo::TI_PROCESS, i, false, false));
     bzero((void *)timeout, sizeof(timeout));
     signal(SIGALRM, test_timeout);
     if (duration[0])
@@ -574,7 +575,7 @@ enum { clp_val_suffixdouble = Clp_ValFirstUser };
 enum { opt_nolog = 1, opt_pin, opt_logdir, opt_port, opt_ckpdir, opt_duration,
        opt_test, opt_test_name, opt_threads, opt_cores,
        opt_print, opt_norun, opt_checkpoint, opt_limit, opt_epoch_interval,
-       opt_quiesce_stat 
+       opt_quiesce_stat, opt_async_quiesce
 #if HAVE_STAT_HTTP
        , opt_stat_http
 #endif
@@ -608,7 +609,8 @@ static const Clp_Option options[] = {
     { "cores", 0, opt_cores, Clp_ValString, 0 },
     { "print", 0, opt_print, 0, Clp_Negate },
     { "epoch-interval", 0, opt_epoch_interval, Clp_ValDouble, 0 },
-    { "quiesce-stat", 'q', opt_quiesce_stat, 0, Clp_Negate }
+    { "quiesce-stat", 'q', opt_quiesce_stat, 0, Clp_Negate },
+    { "async-quiesce", 'a', opt_async_quiesce, 0, Clp_Negate }
 #if HAVE_STAT_HTTP
     , { "stat-http-port", 's', opt_stat_http, Clp_ValInt, 0}
 #endif
@@ -709,6 +711,9 @@ main(int argc, char *argv[])
       case opt_quiesce_stat:
 	enable_quiesce_stat = !clp->negated;
 	break;
+      case opt_async_quiesce:
+	async_quiesce = !clp->negated;
+	break;
 #if HAVE_STAT_HTTP
       case opt_stat_http:
 	  stat_http_port = clp->val.i;
@@ -766,7 +771,7 @@ main(int argc, char *argv[])
   ret = pthread_mutex_init(&checkpoint_mu, 0);
   always_assert(ret == 0);
 
-  threadinfo *main_ti = threadinfo::make(threadinfo::TI_MAIN, -1, enable_quiesce_stat);
+  threadinfo *main_ti = threadinfo::make(threadinfo::TI_MAIN, -1, enable_quiesce_stat, async_quiesce);
   main_ti->pthread() = pthread_self();
 
   initial_timestamp = timestamp();
@@ -790,7 +795,7 @@ main(int argc, char *argv[])
   else
       printf("%d udp threads (ports %d-%d)\n", udpthreads, port, port + udpthreads - 1);
   for(i = 0; i < udpthreads; i++){
-    threadinfo *ti = threadinfo::make(threadinfo::TI_PROCESS, i, enable_quiesce_stat);
+    threadinfo *ti = threadinfo::make(threadinfo::TI_PROCESS, i, enable_quiesce_stat, async_quiesce);
     ret = pthread_create(&ti->pthread(), 0, udp_threadfunc, ti);
     always_assert(ret == 0);
   }
@@ -834,7 +839,7 @@ main(int argc, char *argv[])
   tcp_thread_pipes = new int[tcpthreads * 2];
   printf("%d tcp threads (port %d)\n", tcpthreads, port);
   for(i = 0; i < tcpthreads; i++){
-    threadinfo *ti = threadinfo::make(threadinfo::TI_PROCESS, i, enable_quiesce_stat);
+    threadinfo *ti = threadinfo::make(threadinfo::TI_PROCESS, i, enable_quiesce_stat, async_quiesce);
     ret = pipe(&tcp_thread_pipes[i * 2]);
     always_assert(ret == 0);
     ret = pthread_create(&ti->pthread(), 0, tcp_threadfunc, ti);
@@ -1333,7 +1338,7 @@ void log_init() {
 
   cks = (ckstate *)malloc(sizeof(ckstate) * nckthreads);
   for (i = 0; i < nckthreads; i++) {
-    threadinfo *ti = threadinfo::make(threadinfo::TI_CHECKPOINT, i, enable_quiesce_stat);
+    threadinfo *ti = threadinfo::make(threadinfo::TI_CHECKPOINT, i, enable_quiesce_stat, async_quiesce);
     cks[i].state = CKState_Uninit;
     cks[i].ti = ti;
     ret = pthread_create(&ti->pthread(), 0, conc_checkpointer, ti);
