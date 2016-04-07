@@ -20,6 +20,7 @@
 #include "circular_int.hh"
 #include "timestamp.hh"
 #include "memdebug.hh"
+#include "json.hh"
 #include <assert.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -67,7 +68,7 @@ struct limbo_group {
         e_[tail_].u_.tag = tag;
         ++tail_;
     }
-    inline bool clean_until(threadinfo& ti, mrcu_epoch_type max_epoch);
+  inline bool clean_until(threadinfo& ti, mrcu_epoch_type max_epoch, unsigned int& nr_freed);
 };
 
 template <int N> struct has_threadcounter {
@@ -87,6 +88,39 @@ struct mrcu_callback {
     virtual void operator()(threadinfo& ti) = 0;
 };
 
+class quiesce_stat {
+private:
+    uint64_t max_epoch_;
+    unsigned int nr_freed_;
+    double start_, end_, duration_;
+
+public:
+    quiesce_stat(uint64_t max_epoch, unsigned int nr_freed, double start, double end)
+	: max_epoch_(max_epoch), nr_freed_(nr_freed),
+	  start_(start), end_(end), duration_(end - start) {}
+
+    lcdf::Json to_json() {
+	lcdf::Json result = lcdf::Json();
+
+	result.set("max_epoch", max_epoch_);
+	result.set("nr_freed", nr_freed_);
+	result.set("start", start_);
+	result.set("end", end_);
+	result.set("duration", duration_);
+
+	return result;
+    }
+
+    unsigned int nr_freed() {
+	return nr_freed_;
+    }
+
+    double duration() {
+	return duration_;
+    }
+	
+};
+
 class threadinfo {
   public:
     enum {
@@ -99,7 +133,7 @@ class threadinfo {
         return next_;
     }
 
-    static threadinfo* make(int purpose, int index);
+  static threadinfo* make(int purpose, int index, bool enable_quiesce_stat);
     // XXX destructor
 
     // thread information
@@ -115,6 +149,11 @@ class threadinfo {
     void set_logger(loginfo* logger) {
         assert(!logger_ && logger);
         logger_ = logger;
+    }
+
+    std::vector<quiesce_stat> quiesce_stats() {
+	// if quiesce stat isn't enabled, it just returns an empty vector
+	return quiesce_stats_;
     }
 
     // timestamps
@@ -310,6 +349,17 @@ class threadinfo {
     enum { ncounters = 0 };
     uint64_t counters_[ncounters];
 
+    bool enable_quiesce_stat_;
+    std::vector<quiesce_stat> quiesce_stats_;
+    void record_quiesce_stat(uint64_t min_epoch, unsigned int nr_freed,
+			     double start, double end) {
+	if (!enable_quiesce_stat_)
+	    return;
+
+	quiesce_stat stat = quiesce_stat(min_epoch, nr_freed, start, end);
+	quiesce_stats_.push_back(stat);
+    }
+
     void refill_pool(int nl);
     void refill_rcu();
 
@@ -347,7 +397,7 @@ class threadinfo {
 #endif
     }
 
-    inline threadinfo(int purpose, int index);
+  inline threadinfo(int purpose, int index, bool enable_quiesce_stat);
     threadinfo(const threadinfo&) = delete;
     ~threadinfo() {}
     threadinfo& operator=(const threadinfo&) = delete;

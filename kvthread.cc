@@ -29,7 +29,7 @@ threadinfo *threadinfo::allthreads;
 int threadinfo::no_pool_value;
 #endif
 
-inline threadinfo::threadinfo(int purpose, int index) {
+inline threadinfo::threadinfo(int purpose, int index, bool enable_quiesce_stat) {
     memset(this, 0, sizeof(*this));
     purpose_ = purpose;
     index_ = index;
@@ -38,12 +38,14 @@ inline threadinfo::threadinfo(int purpose, int index) {
     mark(tc_limbo_slots, limbo_group::capacity);
     limbo_head_ = limbo_tail_ = new(limbo_space) limbo_group;
     ts_ = 2;
+
+    enable_quiesce_stat_ = enable_quiesce_stat;
 }
 
-threadinfo *threadinfo::make(int purpose, int index) {
+threadinfo *threadinfo::make(int purpose, int index, bool enable_quiesce_stat) {
     static int threads_initialized;
 
-    threadinfo* ti = new(malloc(8192)) threadinfo(purpose, index);
+    threadinfo* ti = new(malloc(8192)) threadinfo(purpose, index, enable_quiesce_stat);
     ti->next_ = allthreads;
     allthreads = ti;
 
@@ -68,13 +70,14 @@ void threadinfo::refill_rcu() {
     assert(limbo_tail_->head_ == 0 && limbo_tail_->tail_ == 0);
 }
 
-inline bool limbo_group::clean_until(threadinfo& ti, mrcu_epoch_type max_epoch) {
+inline bool limbo_group::clean_until(threadinfo& ti, mrcu_epoch_type max_epoch, unsigned int& nr_freed) {
     while (head_ != tail_ && mrcu_signed_epoch_type(max_epoch - e_[head_].u_.epoch) > 0) {
         ++head_;
         while (head_ != tail_ && e_[head_].ptr_) {
             ti.free_rcu(e_[head_].ptr_, e_[head_].u_.tag);
             ti.mark(tc_gc);
             ++head_;
+	    ++nr_freed;
         }
     }
     if (head_ == tail_) {
@@ -90,8 +93,11 @@ void threadinfo::hard_rcu_quiesce() {
     limbo_group* empty_head = nullptr;
     limbo_group* empty_tail = nullptr;
 
+    double quiesce_start = now();
+    unsigned int nr_freed = 0;
+
     // clean [limbo_head_, limbo_tail_]
-    while (limbo_head_->clean_until(*this, max_epoch)) {
+    while (limbo_head_->clean_until(*this, max_epoch, nr_freed)) {
         if (!empty_head)
             empty_head = limbo_head_;
         empty_tail = limbo_head_;
@@ -112,6 +118,9 @@ done:
         limbo_epoch_ = limbo_head_->e_[limbo_head_->head_].u_.epoch;
     else
         limbo_epoch_ = 0;
+
+    double quiesce_end = now();
+    record_quiesce_stat(max_epoch, nr_freed, quiesce_start, quiesce_end);
 }
 
 void threadinfo::report_rcu(void *ptr) const
