@@ -1624,4 +1624,11 @@ void kvtest_url(C &client)
   kvtest_url_seed(client);
 }
 
+template <typename C>
+void kvtest_mytest(C &client)
+{
+  printf("mytest\n");
+  client.put("key", "value");
+}
+
 #endif
