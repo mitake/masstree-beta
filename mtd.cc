@@ -1862,11 +1862,6 @@ static int stat_cb(void *cls,
 
       Json history = Json::make_array();
       for (unsigned int i = 0; i < stats.size(); i++) {
-	if (stats[i].duration() < 0.001 || stats[i].nr_freed() < 1024)
-	  // skip small pause times, not interesting and result bloating JSON
-	  // TODO: custom filters?
-	  continue;
-
 	history.push_back(stats[i].to_json());
 	if (i == 10)		// FIXME: large json produces incorrect unparse() result?
 	  break;
