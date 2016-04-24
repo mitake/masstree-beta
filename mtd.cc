@@ -1813,8 +1813,10 @@ static int stat_cb(void *cls,
   (void)upload_data;
   (void)ptr;
 
-  if (0 != strcmp(method, "GET"))
+  if (0 != strcmp(method, "GET")) {
+    printf("invalid method: %s\n", method);
     return MHD_NO;
+  }
 
   static int dummy;
   if (&dummy != *ptr) {
@@ -1845,6 +1847,7 @@ static int stat_cb(void *cls,
       "</html>\n";
   } else if (!strcmp(url, "/rcu-quiesce.json")) {
     Json results = Json::make_array();
+    printf("rcu quiesce is required\n");
 
     for (threadinfo *ti = threadinfo::allthreads; ti; ti = ti->next()) {
       Json result = Json::make_array();
@@ -1886,6 +1889,9 @@ static int stat_cb(void *cls,
 								  (void*) page_str,
 								  MHD_RESPMEM_PERSISTENT);
   int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+  if (ret != MHD_YES) {
+    printf("failed to queue response: %d\n", ret);
+  }
   MHD_destroy_response(response);
   return ret;
 }
